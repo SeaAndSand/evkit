@@ -7,6 +7,8 @@
 #include "evkit/ev_loop.h"
 #include "test_ownership.h"
 #include "test_pool.h"
+#include "test_task.h"
+#include "test_work.h"
 
 #include <pthread.h>
 #include <stdint.h>
@@ -892,6 +894,8 @@ int main(void)
     test_bus_unsub_inflight_still_runs();
     test_ownership_and_boundaries();
     test_pool_suite();
+    test_work_suite();
+    test_task_suite();
 
     if (g_test_failures != 0) {
         fprintf(stderr, "======== %d failure(s) ========\n", g_test_failures);

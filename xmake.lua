@@ -3,7 +3,7 @@
 
   include/evkit/   对外头文件
   src/core/        → libevkit_core
-  src/plugins/     → libevkit_bus / libevkit_pool
+  src/plugins/     → libevkit_bus / pool / work / task
   tests/           单元测试
   examples/        示例（含 demo 官方模板）
 ]]
@@ -54,9 +54,21 @@ target("evkit_pool")
     add_files("src/plugins/ev_pool.c")
     add_headerfiles("include/evkit/ev_pool.h")
 
+target("evkit_work")
+    set_kind("static")
+    add_deps("evkit_core")
+    add_files("src/plugins/ev_work.c")
+    add_headerfiles("include/evkit/ev_work.h")
+
+target("evkit_task")
+    set_kind("static")
+    add_deps("evkit_core", "evkit_work", "evkit_pool")
+    add_files("src/plugins/ev_task.c")
+    add_headerfiles("include/evkit/ev_task.h")
+
 target("evkit")
     set_kind("phony")
-    add_deps("evkit_core", "evkit_bus", "evkit_pool")
+    add_deps("evkit_core", "evkit_bus", "evkit_pool", "evkit_work", "evkit_task")
     set_default(true)
 
 --------------------------------------------------------------------------------
@@ -65,7 +77,7 @@ target("evkit")
 
 target("evkit_test")
     set_kind("binary")
-    add_deps("evkit_core", "evkit_bus", "evkit_pool")
+    add_deps("evkit_core", "evkit_bus", "evkit_pool", "evkit_work", "evkit_task")
     add_files("tests/*.c")
     add_includedirs("tests")
     set_default(false)
@@ -112,6 +124,18 @@ local function example_pool(name, dir)
         end
 end
 
+local function example_work(name, dir)
+    target(name)
+        set_kind("binary")
+        add_deps("evkit_core", "evkit_work")
+        add_files(path.join(dir, "main.c"))
+        set_default(false)
+        set_group("examples")
+        if not has_config("examples") then
+            set_enabled(false)
+        end
+end
+
 example_core("evkit_demo", "examples/demo", true)
 example_core("worker_ping", "examples/worker_ping")
 example_core("upgrade_link", "examples/upgrade_link")
@@ -122,6 +146,17 @@ example_core("cmd_retry", "examples/cmd_retry")
 example_full("bus_demo", "examples/bus_demo")
 example_full("topic_hub", "examples/topic_hub")
 example_pool("pool_ping", "examples/pool_ping")
+example_work("work_ping", "examples/work_ping")
+
+target("task_ping")
+    set_kind("binary")
+    add_deps("evkit_core", "evkit_task")
+    add_files("examples/task_ping/main.c")
+    set_default(false)
+    set_group("examples")
+    if not has_config("examples") then
+        set_enabled(false)
+    end
 
 target("tcp_cmd_client")
     set_kind("binary")
