@@ -21,8 +21,8 @@ build/
 # IDE / clangd
 .cache/
 *.idx
-# compile_commands.json 可由 xmake 自动生成，按需提交；默认忽略本地生成
-# compile_commands.json
+# xmake 自动生成，含本机绝对路径
+compile_commands.json
 
 # 杂项
 *.log

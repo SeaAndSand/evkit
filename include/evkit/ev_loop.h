@@ -40,8 +40,7 @@ typedef struct ev_timer ev_timer_t;
 typedef void (*ev_io_fn)(ev_loop_t *loop, ev_io_t *io, uint32_t events);
 typedef void (*ev_timer_fn)(ev_loop_t *loop, ev_timer_t *timer);
 typedef void (*ev_post_fn)(void *user_data);
-typedef void (*ev_post_free_fn)(void *user_data); // 可选：回调结束后或 deinit 丢弃时调用恰好一次
-typedef void (*ev_post_free_fn)(void *user_data); // 可选；见 ev_loop_post_full
+typedef void (*ev_post_free_fn)(void *user_data); // 可选：回调结束后或 deinit 丢弃时调用恰好一次；见 ev_loop_post_full
 
 /******************************************************************************/
 /* 数据结构                                                                   */
