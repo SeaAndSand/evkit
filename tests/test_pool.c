@@ -187,6 +187,71 @@ static void test_pool_done_requires_loop(void)
     ev_pool_deinit(&pool);
 }
 
+static pthread_mutex_t g_fail_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_fail_cv = PTHREAD_COND_INITIALIZER;
+static int g_fail_done;
+static int g_fail_status;
+static int g_fail_free;
+
+static void fail_work(void *p)
+{
+    (void)p;
+}
+
+static void fail_done(void *p, int status)
+{
+    (void)p;
+    pthread_mutex_lock(&g_fail_mu);
+    g_fail_done = 1;
+    g_fail_status = status;
+    pthread_cond_signal(&g_fail_cv);
+    pthread_mutex_unlock(&g_fail_mu);
+}
+
+static void fail_free(void *p)
+{
+    g_fail_free++;
+    free(p);
+}
+
+static void post_nop(void *ud)
+{
+    (void)ud;
+}
+
+static void test_pool_done_on_post_fail(void)
+{
+    printf("[pool] target_loop post 满：worker 上 done(status!=0)+free\n");
+    ev_loop_t loop = {0};
+    ev_pool_t pool;
+    g_fail_done = 0;
+    g_fail_status = 0;
+    g_fail_free = 0;
+
+    expect_true(ev_loop_init(&loop) == 0 && ev_pool_init(&pool, 1) == 0, "init");
+    for (int i = 0; i < EV_LOOP_POST_CAPACITY; i++) {
+        expect_true(ev_loop_post(&loop, post_nop, NULL) == 0, "fill post");
+    }
+
+    void *payload = malloc(1);
+    expect_true(payload != NULL, "malloc");
+    expect_true(ev_pool_submit(&pool, &loop, fail_work, fail_done, payload, fail_free) == 0, "submit");
+
+    pthread_mutex_lock(&g_fail_mu);
+    while (!g_fail_done) {
+        pthread_cond_wait(&g_fail_cv, &g_fail_mu);
+    }
+    pthread_mutex_unlock(&g_fail_mu);
+
+    expect_true(g_fail_status != 0, "status != 0");
+    expect_true(g_fail_free == 1, "freed");
+    expect_true(pool.done_dropped >= 1, "done_dropped");
+
+    (void)ev_pool_shutdown(&pool, EV_POOL_SHUTDOWN_DRAIN);
+    ev_pool_deinit(&pool);
+    ev_loop_deinit(&loop);
+}
+
 void test_pool_suite(void)
 {
     printf("======== ev_pool ========\n");
@@ -194,4 +259,5 @@ void test_pool_suite(void)
     test_pool_queue_full();
     test_pool_shutdown_discard();
     test_pool_done_requires_loop();
+    test_pool_done_on_post_fail();
 }

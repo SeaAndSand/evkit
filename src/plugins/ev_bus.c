@@ -111,23 +111,25 @@ int ev_bus_publish(ev_bus_t *bus, const void *topic, void *payload)
         return -1;
     }
 
-    /* 先快照再分发：SYNC 回调里增删不影响本次集合 */
+    /* 先整表拷贝再 match/分发：match 或 SYNC 回调里增删不影响本次迭代 */
     ev_bus_sub_t snaps[EV_BUS_SUB_MAX];
-    int nsnap = 0;
-    for (int i = 0; i < bus->sub_count; i++) {
-        ev_bus_sub_t *s = &bus->subs[i];
+    int nsnap = bus->sub_count;
+    if (nsnap > EV_BUS_SUB_MAX) {
+        nsnap = EV_BUS_SUB_MAX;
+    }
+    if (nsnap > 0) {
+        memcpy(snaps, bus->subs, (size_t)nsnap * sizeof(snaps[0]));
+    }
+
+    int n = 0;
+    for (int i = 0; i < nsnap; i++) {
+        ev_bus_sub_t *s = &snaps[i];
         if (s->sub_id <= 0 || s->cb == NULL || s->match == NULL) {
             continue;
         }
         if (!s->match(topic, s->match_arg, s->user_data)) {
             continue;
         }
-        snaps[nsnap++] = *s;
-    }
-
-    int n = 0;
-    for (int i = 0; i < nsnap; i++) {
-        ev_bus_sub_t *s = &snaps[i];
         switch (s->mode) {
         case EV_BUS_SYNC:
             s->cb(topic, payload, s->user_data);

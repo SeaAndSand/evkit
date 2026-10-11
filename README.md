@@ -44,7 +44,7 @@ ev_loop_run（单线程）
 | guard | 不进核心；边界收成独立事件 |
 | EV_FSM_ANY | 精确 > 半通配 > 双通配；同级按表序 |
 | 跨线程 API | **`ev_loop_post` / `ev_loop_stop` 官方支持**；`ev_fsm_post` 仍仅 loop 线程 |
-| FAULT | 边表必须含 `event==EV_FSM_FAULT` 的收敛边，否则 `ev_fsm_init` 失败 |
+| FAULT | 边表必须含 `from_state==EV_FSM_ANY && event==EV_FSM_FAULT` 的全局收敛边，否则 `ev_fsm_init` 失败；处理 FAULT 时先清积压再 apply，FAULT 边 post 的事件留到下一次 poll |
 
 ## 线程契约（必须遵守）
 
@@ -128,9 +128,9 @@ ev_loop_run（单线程）
 - **stop**：`ev_loop_stop` 可在 `run` 之前调用
 - **post_full**：`ev_loop_post_full(cb, ud, free_fn)`；`free_fn` 在 callback 之后或 deinit 丢弃时恰好一次；有 `free_fn` 时 callback 内勿再 free 同一块
 - **bus**：`subscribe(mode, target_loop, cb, ud, match, match_arg)`；`publish(topic, payload)` 对命中项扇出；回调类型 `ev_bus_cb`；简单场景用 `ev_bus_match_u32`；范围/掩码等由应用写 `match`；`publish` 返回成功分发次数；POST 满则 `post_dropped++`；退订不撤销已入队 POST；**POST 保活见上文硬规则**；delivery 走 `post_full`
-- **pool**：`submit(pool, target_loop, work, done, user_data, free_fn)`；`free_fn` 与 `ev_loop_post_full` 同义；`shutdown(DRAIN|DISCARD)`；计数 `submit_dropped` / `jobs_discarded`
+- **pool**：`submit(pool, target_loop, work, done, user_data, free_fn)`；`free_fn` 与 `ev_loop_post_full` 同义；`shutdown(DRAIN|DISCARD)`；计数 `submit_dropped` / `jobs_discarded` / `done_dropped`；`done` 的 `status==0` 在 target_loop，`status!=0` 表示投递失败（在 worker 上调 done，仍禁止碰 fsm/io/timer/bus）
 - **post/FSM 队列满**：均返回 `-1` 并累计计数；**FSM** 满时库 `free_arg(arg)`；**loop post** 满时调用方 free `user_data`（两套模型见「资源所有权」）
-- **步数上限**：嵌套 `run` → `-1`；post drain 触达上限则 `post_drain_limit_hits++`；FSM 单次 poll 触达 `EV_FSM_POLL_MAX_STEPS` 则清空队列并投入 `EV_FSM_FAULT`，同一次 while 继续消化（`poll_limit_hits++`）
+- **步数上限**：嵌套 `run` → `-1`；post drain 触达上限则 `post_drain_limit_hits++`；FSM 单次 poll 触达 `EV_FSM_POLL_MAX_STEPS` 则清空队列并投入 `EV_FSM_FAULT`，同一次 while 继续消化（`poll_limit_hits++`）；处理 FAULT 时先清积压再 apply，FAULT 边新 post 留到下一次 poll
 - **迁移顺序**：`on_exit` → `action` → 改 state → `on_enter`；action 内 `get_state()` 仍是旧状态
 - **多超时约定**（不进核心；写法见 `examples/nested_timeout/`、`examples/cmd_retry/`）
   1. 超时有身份：`EV_DEADLINE` / `EV_STEP_TO` / `EV_Wi_TO` …，禁止一个匿名 `EV_TIMEOUT` 打所有边

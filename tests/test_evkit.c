@@ -739,6 +739,133 @@ static void test_loop_post_full_run_frees(void)
     ev_loop_deinit(&loop);
 }
 
+/* unregister 自身不得使本轮后续 FSM 漏 poll */
+enum { U_ST = 0 };
+enum { U_EV = 1 };
+
+static ev_loop_t *g_unreg_loop;
+static ev_fsm_t *g_unreg_a;
+static int g_unreg_hit_a;
+static int g_unreg_hit_b;
+static int g_unreg_hit_c;
+
+static void unreg_action_a(void *ud, int event, void *arg)
+{
+    (void)ud;
+    (void)event;
+    (void)arg;
+    g_unreg_hit_a++;
+    (void)ev_loop_unregister_fsm(g_unreg_loop, g_unreg_a);
+}
+
+static void unreg_action_b(void *ud, int event, void *arg)
+{
+    (void)ud;
+    (void)event;
+    (void)arg;
+    g_unreg_hit_b++;
+}
+
+static void unreg_action_c(void *ud, int event, void *arg)
+{
+    (void)ud;
+    (void)event;
+    (void)arg;
+    g_unreg_hit_c++;
+}
+
+static void test_loop_unregister_during_poll_no_skip(void)
+{
+    printf("[loop] poll 中 unregister 自身不跳过后续 FSM\n");
+    ev_loop_t loop = {0};
+    ev_fsm_t a = {0};
+    ev_fsm_t b = {0};
+    ev_fsm_t c = {0};
+    static const ev_fsm_transition_t edges_a[] = {
+        { .from_state = U_ST, .event = U_EV, .to_state = EV_FSM_STAY, .action = unreg_action_a },
+        { .from_state = EV_FSM_ANY, .event = EV_FSM_FAULT, .to_state = U_ST, .action = NULL },
+    };
+    static const ev_fsm_transition_t edges_b[] = {
+        { .from_state = U_ST, .event = U_EV, .to_state = EV_FSM_STAY, .action = unreg_action_b },
+        { .from_state = EV_FSM_ANY, .event = EV_FSM_FAULT, .to_state = U_ST, .action = NULL },
+    };
+    static const ev_fsm_transition_t edges_c[] = {
+        { .from_state = U_ST, .event = U_EV, .to_state = EV_FSM_STAY, .action = unreg_action_c },
+        { .from_state = EV_FSM_ANY, .event = EV_FSM_FAULT, .to_state = U_ST, .action = NULL },
+    };
+
+    g_unreg_loop = &loop;
+    g_unreg_a = &a;
+    g_unreg_hit_a = g_unreg_hit_b = g_unreg_hit_c = 0;
+
+    expect_true(ev_loop_init(&loop) == 0, "init");
+    expect_true(ev_fsm_init(&a, U_ST, edges_a, 2, NULL, 0, NULL, NULL) == 0, "init a");
+    expect_true(ev_fsm_init(&b, U_ST, edges_b, 2, NULL, 0, NULL, NULL) == 0, "init b");
+    expect_true(ev_fsm_init(&c, U_ST, edges_c, 2, NULL, 0, NULL, NULL) == 0, "init c");
+    expect_true(ev_loop_register_fsm(&loop, &a) == 0, "reg a");
+    expect_true(ev_loop_register_fsm(&loop, &b) == 0, "reg b");
+    expect_true(ev_loop_register_fsm(&loop, &c) == 0, "reg c");
+    expect_true(ev_fsm_post(&a, U_EV, NULL) == 0, "post a");
+    expect_true(ev_fsm_post(&b, U_EV, NULL) == 0, "post b");
+    expect_true(ev_fsm_post(&c, U_EV, NULL) == 0, "post c");
+    expect_true(ev_loop_post(&loop, post_stop, &loop) == 0, "stop");
+    expect_true(ev_loop_run(&loop) == 0, "run");
+    expect_true(g_unreg_hit_a == 1, "A polled");
+    expect_true(g_unreg_hit_b == 1, "B polled");
+    expect_true(g_unreg_hit_c == 1, "C polled");
+
+    (void)ev_loop_unregister_fsm(&loop, &b);
+    (void)ev_loop_unregister_fsm(&loop, &c);
+    ev_fsm_deinit(&a);
+    ev_fsm_deinit(&b);
+    ev_fsm_deinit(&c);
+    ev_loop_deinit(&loop);
+}
+
+static void test_fsm_fault_requires_any(void)
+{
+    printf("[fsm] FAULT 边须 from_state==ANY\n");
+    ev_fsm_t fsm = {0};
+    static const ev_fsm_transition_t bad[] = {
+        { .from_state = S0, .event = EV_FSM_FAULT, .to_state = S0, .action = NULL },
+    };
+    expect_true(ev_fsm_init(&fsm, S0, bad, 1, NULL, 0, NULL, NULL) == -1, "reject non-ANY FAULT");
+}
+
+static int g_fault_recover_posts;
+
+static void action_fault_post_recover(void *ud, int event, void *arg)
+{
+    (void)event;
+    (void)arg;
+    ev_fsm_t *fsm = ud;
+    g_fault_recover_posts++;
+    (void)ev_fsm_post(fsm, E_GO, NULL);
+}
+
+static void test_fsm_fault_keeps_posts_for_next_poll(void)
+{
+    printf("[fsm] FAULT action post 保留到下一次 poll\n");
+    ev_fsm_t fsm = {0};
+    static const ev_fsm_transition_t edges[] = {
+        { .from_state = S0, .event = E_GO, .to_state = S1, .action = NULL },
+        { .from_state = S2, .event = E_GO, .to_state = S1, .action = NULL },
+        { .from_state = EV_FSM_ANY, .event = EV_FSM_FAULT, .to_state = S2, .action = action_fault_post_recover },
+    };
+    g_fault_recover_posts = 0;
+    expect_true(ev_fsm_init(&fsm, S0, edges, 3, NULL, 0, &fsm, NULL) == 0, "init");
+    expect_true(ev_fsm_post(&fsm, EV_FSM_FAULT, NULL) == 0, "post FAULT");
+    expect_true(ev_fsm_post(&fsm, E_GO, NULL) == 0, "post backlog");
+    ev_fsm_poll(&fsm);
+    expect_true(ev_fsm_get_state(&fsm) == S2, "FAULT → S2");
+    expect_true(g_fault_recover_posts == 1, "fault action ran");
+    expect_true(ev_fsm_queue_len(&fsm) == 1, "recover kept");
+    ev_fsm_poll(&fsm);
+    expect_true(ev_fsm_get_state(&fsm) == S1, "recover → S1");
+    expect_true(ev_fsm_queue_len(&fsm) == 0, "empty");
+    ev_fsm_deinit(&fsm);
+}
+
 int main(void)
 {
     printf("======== evkit unit tests ========\n");
@@ -746,6 +873,8 @@ int main(void)
     test_fsm_wildcard_priority();
     test_fsm_overflow_and_repost();
     test_fsm_poll_limit();
+    test_fsm_fault_requires_any();
+    test_fsm_fault_keeps_posts_for_next_poll();
     test_fsm_deinit_frees_pending();
     test_loop_nested_guard();
     test_loop_timer_remove();
@@ -757,6 +886,7 @@ int main(void)
     test_loop_cross_thread_post();
     test_loop_post_full_deinit_frees();
     test_loop_post_full_run_frees();
+    test_loop_unregister_during_poll_no_skip();
     test_bus_sync_and_post();
     test_bus_multi_post_shared_payload();
     test_bus_unsub_inflight_still_runs();

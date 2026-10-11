@@ -3,13 +3,19 @@
  * @brief   线程池插件：有界队列 + N worker；完成后 ev_loop_post 回 target_loop
  *
  * 建在 evkit core 之上（与 ev_bus 同级）。worker 只执行 work，禁止直接调
- * ev_fsm_* / ev_io_* / ev_timer_* / ev_bus_*；业务推进放在 done 回调（target_loop 线程）。
+ * ev_fsm_* / ev_io_* / ev_timer_* / ev_bus_*；业务推进放在 done 回调。
  *
  * ---- 内存 ----
  * submit 成功：user_data 交池托管，直至 done 返回后经 free_fn 释放，或 shutdown discard
  * 时对未开跑任务调 free_fn（不调 done）。
  * submit 失败（满/已 shutdown）：不接管 user_data，调用者自行释放。
  * done 非 NULL 时必须提供 target_loop；投递包装走 ev_loop_post_full。
+ *
+ * ---- done / status ----
+ * - status==0：work 已完成，且在 target_loop 线程调用 done（经 post_full）。
+ * - status!=0：work 已完成，但投递到 target_loop 失败（队列满/OOM）；done 在 worker
+ *   线程调用，仍禁止碰 fsm/io/timer/bus；随后在同线程调 free_fn。done_dropped++。
+ * 丢弃路径（shutdown DISCARD）不调用 done。
  *
  * ---- 停机 ----
  * EV_POOL_SHUTDOWN_DRAIN：停收新任务，跑完队列再 join。
@@ -43,7 +49,7 @@ typedef enum {
 typedef void (*ev_pool_work_fn)(void *user_data);
 
 /**
- * target_loop 线程执行；status 恒为 0（成功跑完 work）。
+ * status==0：在 target_loop 线程；status!=0：投递失败，在 worker 线程。
  * 丢弃路径不调用 done。
  */
 typedef void (*ev_pool_done_fn)(void *user_data, int status);
@@ -69,6 +75,7 @@ typedef struct ev_pool {
     int stopping;  // 1=worker 应在队列空后退出
     uint32_t submit_dropped;
     uint32_t jobs_discarded;
+    uint32_t done_dropped; // work 完成但 post 回 target_loop 失败的次数
 } ev_pool_t;
 
 /******************************************************************************/

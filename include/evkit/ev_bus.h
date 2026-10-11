@@ -117,7 +117,7 @@ int ev_bus_unsubscribe(ev_bus_t *bus, int sub_id);
  * @return 成功分发次数（SYNC 调用次数 + POST 入队成功次数）
  *
  * 单个 POST 队列满：跳过该订阅，post_dropped++，继续其余订阅。
- * publish 期间先快照订阅表再分发。
+ * publish 先整表拷贝再 match/分发（match 内改表不影响本次）。
  * POST 保活见文件头与 README「资源所有权」。
  */
 int ev_bus_publish(ev_bus_t *bus, const void *topic, void *payload);

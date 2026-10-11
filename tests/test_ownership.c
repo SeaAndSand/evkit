@@ -343,7 +343,7 @@ static void test_loop_register_fsm_max(void)
     expect_true(ev_loop_init(&loop) == 0, "init");
     ev_fsm_t fsms[EV_LOOP_FSM_MAX + 1];
     static const ev_fsm_transition_t edges[] = {
-        { .from_state = 0, .event = EV_FSM_FAULT, .to_state = 0, .action = NULL },
+        { .from_state = EV_FSM_ANY, .event = EV_FSM_FAULT, .to_state = 0, .action = NULL },
     };
     int ok = 1;
     for (int i = 0; i < EV_LOOP_FSM_MAX; i++) {

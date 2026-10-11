@@ -3,7 +3,7 @@
  * @brief   队列边表状态机：回调里 post，loop 注册后每轮统一 poll
  *
  * 契约：仅所属 loop 线程调用；跨线程先 ev_loop_post 再 post。
- * 边表必须含 event==EV_FSM_FAULT 的收敛边。
+ * 边表必须含 from_state==EV_FSM_ANY && event==EV_FSM_FAULT 的全局收敛边。
  * arg：入队后由库经 free_arg 释放（溢出 / poll 处理完 / FAULT 清队 / ev_fsm_deinit）；
  *      action 不可接管。堆 arg 必须提供非 NULL 的 free_arg。
  * 与 ev_loop_post(user_data) 相反：loop 侧 user_data 始终由调用者释放。
@@ -27,7 +27,7 @@ extern "C" {
 #define EV_FSM_POLL_MAX_STEPS 256 // 单次 poll 最多迁移步数，防止 enter/post 成环
 #define EV_FSM_ANY   (-1)         // from_state / event：通配；精确边优先于通配
 #define EV_FSM_STAY  (-2)         // to_state：保持状态，不触发 on_exit/on_enter
-#define EV_FSM_FAULT (-3)         // 步数上限触发的收敛事件；边表必须含对应边
+#define EV_FSM_FAULT (-3)         // 步数上限触发的收敛事件；边表须含 ANY+FAULT 边
 
 /******************************************************************************/
 /* 回调类型                                                                   */
@@ -93,13 +93,13 @@ typedef struct ev_fsm {
  * @brief  初始化状态机，并对初始状态调用 on_enter
  * @param  fsm                状态机
  * @param  initial_state      初始状态编号
- * @param  transitions        边表，可放 const/Flash；须含 EV_FSM_FAULT 边
+ * @param  transitions        边表，可放 const/Flash；须含 ANY+EV_FSM_FAULT 边
  * @param  transition_count   边数量
  * @param  states             可选，按下标对应状态；无 hook 可传 NULL
  * @param  state_count        states 元素数
  * @param  user_data          传给 action/hook 的上下文
  * @param  free_arg           释放 arg 的回调；可 NULL（见文件头契约）
- * @return 0 成功，-1 失败（含缺 FAULT 边）
+ * @return 0 成功，-1 失败（含缺全局 FAULT 边）
  */
 int ev_fsm_init(ev_fsm_t *fsm, int initial_state, const ev_fsm_transition_t *transitions, size_t transition_count, const ev_fsm_state_t *states, size_t state_count, void *user_data, ev_fsm_free_arg_fn free_arg);
 
@@ -136,6 +136,7 @@ int ev_fsm_post(ev_fsm_t *fsm, int event, void *arg);
  * action 内 get_state() 仍为旧状态；action 返回后库仍会 free_arg(arg)。
  * action 内禁止再 poll；勿在回调里 free 正在 poll 的本 fsm。
  * 步数触达 EV_FSM_POLL_MAX_STEPS 时清空队列并投入 EV_FSM_FAULT，同一次 while 继续消化。
+ * 处理 FAULT 时先清积压再 apply；FAULT 边 post 的事件保留到下一次 poll。
  * 推荐由 ev_loop_register_fsm 在回合末统一调用，业务回调里只 post。
  */
 void ev_fsm_poll(ev_fsm_t *fsm);

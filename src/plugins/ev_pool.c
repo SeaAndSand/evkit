@@ -31,31 +31,39 @@ static void ev_pool_free_delivery(void *user_data)
     free(d);
 }
 
-static void ev_pool_job_finish(ev_pool_job_t *job)
+/** 投递失败或无 target_loop：在当前线程（通常为 worker）调 done/free_fn */
+static void ev_pool_finish_local(ev_pool_job_t *job, int status)
 {
-    if (job->target_loop != NULL && (job->done != NULL || job->free_fn != NULL)) {
-        ev_pool_delivery_t *d = calloc(1, sizeof(*d));
-        if (d == NULL) {
-            if (job->free_fn != NULL) {
-                job->free_fn(job->user_data);
-            }
-            return;
-        }
-        d->done = job->done;
-        d->user_data = job->user_data;
-        d->free_fn = job->free_fn;
-        if (ev_loop_post_full(job->target_loop, ev_pool_on_delivery, d, ev_pool_free_delivery) != 0) {
-            ev_pool_free_delivery(d);
-        }
-        return;
-    }
-
     if (job->done != NULL) {
-        job->done(job->user_data, 0);
+        job->done(job->user_data, status);
     }
     if (job->free_fn != NULL) {
         job->free_fn(job->user_data);
     }
+}
+
+static void ev_pool_job_finish(ev_pool_t *pool, ev_pool_job_t *job)
+{
+    if (job->target_loop != NULL && (job->done != NULL || job->free_fn != NULL)) {
+        ev_pool_delivery_t *d = calloc(1, sizeof(*d));
+        if (d != NULL) {
+            d->done = job->done;
+            d->user_data = job->user_data;
+            d->free_fn = job->free_fn;
+            if (ev_loop_post_full(job->target_loop, ev_pool_on_delivery, d, ev_pool_free_delivery) == 0) {
+                return;
+            }
+            free(d);
+        }
+        /* OOM 或 post 满：通知调用方，避免 done 静默丢失 */
+        pthread_mutex_lock(&pool->mu);
+        pool->done_dropped++;
+        pthread_mutex_unlock(&pool->mu);
+        ev_pool_finish_local(job, -1);
+        return;
+    }
+
+    ev_pool_finish_local(job, 0);
 }
 
 static void ev_pool_job_discard(ev_pool_t *pool, ev_pool_job_t *job)
@@ -116,7 +124,7 @@ static void *ev_pool_worker_main(void *arg)
         if (job.work != NULL) {
             job.work(job.user_data);
         }
-        ev_pool_job_finish(&job);
+        ev_pool_job_finish(pool, &job);
     }
     return NULL;
 }

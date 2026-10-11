@@ -633,14 +633,34 @@ int ev_loop_unregister_fsm(ev_loop_t *loop, ev_fsm_t *fsm)
 /* ev_loop：run */
 /******************************************************************************/
 /**
- * @brief  对已注册的 FSM 各做一次 poll
+ * @brief  对本轮开始时已注册的 FSM 各做一次 poll
  * @param  loop  事件循环
  * @return 无
+ *
+ * 先快照指针再 poll：回调里 unregister 压缩数组时不会跳过后续 FSM。
+ * 本轮中途被注销的跳过；本轮新 register 的留到下一轮。
  */
 static void poll_registered_fsms(ev_loop_t *loop)
 {
-    for (int i = 0; i < loop->fsm_count; i++) {
-        ev_fsm_poll(loop->fsms[i]);
+    ev_fsm_t *snap[EV_LOOP_FSM_MAX];
+    int n = loop->fsm_count;
+    if (n > EV_LOOP_FSM_MAX) {
+        n = EV_LOOP_FSM_MAX;
+    }
+    for (int i = 0; i < n; i++) {
+        snap[i] = loop->fsms[i];
+    }
+    for (int i = 0; i < n; i++) {
+        int still = 0;
+        for (int j = 0; j < loop->fsm_count; j++) {
+            if (loop->fsms[j] == snap[i]) {
+                still = 1;
+                break;
+            }
+        }
+        if (still) {
+            ev_fsm_poll(snap[i]);
+        }
     }
 }
 

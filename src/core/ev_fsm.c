@@ -126,7 +126,7 @@ static const ev_fsm_transition_t *find_transition(const ev_fsm_t *fsm, int state
 }
 
 /**
- * @brief  边表是否含 EV_FSM_FAULT 收敛边
+ * @brief  边表是否含全局 FAULT 收敛边（from_state==ANY && event==FAULT）
  * @param  transitions  边表
  * @param  count        边数量
  * @return 1 有，0 无
@@ -134,7 +134,7 @@ static const ev_fsm_transition_t *find_transition(const ev_fsm_t *fsm, int state
 static int has_fault_edge(const ev_fsm_transition_t *transitions, size_t count)
 {
     for (size_t i = 0; i < count; i++) {
-        if (transitions[i].event == EV_FSM_FAULT) {
+        if (transitions[i].from_state == EV_FSM_ANY && transitions[i].event == EV_FSM_FAULT) {
             return 1;
         }
     }
@@ -300,6 +300,17 @@ void ev_fsm_poll(ev_fsm_t *fsm)
     uint32_t steps = 0;
     ev_fsm_item_t item = {0};
     while (queue_pop(fsm, &item)) {
+        if (item.event == EV_FSM_FAULT) {
+            /* 先清积压，再 apply：FAULT 边 post 的事件留给下一次 poll */
+            queue_clear(fsm);
+            const ev_fsm_transition_t *edge = find_transition(fsm, fsm->state, item.event);
+            if (edge != NULL) {
+                apply_transition(fsm, edge, item.event, item.arg);
+            }
+            call_free_arg(fsm, item.arg);
+            break;
+        }
+
         const ev_fsm_transition_t *edge = find_transition(fsm, fsm->state, item.event);
         if (edge == NULL) {
             call_free_arg(fsm, item.arg);
@@ -308,10 +319,6 @@ void ev_fsm_poll(ev_fsm_t *fsm)
         apply_transition(fsm, edge, item.event, item.arg);
         call_free_arg(fsm, item.arg);
 
-        if (item.event == EV_FSM_FAULT) {
-            queue_clear(fsm);
-            break;
-        }
         steps++;
         if (steps >= EV_FSM_POLL_MAX_STEPS) {
             /* 触达步数上限：清队列并压入 FAULT，由本 while 继续消化 */
