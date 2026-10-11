@@ -19,19 +19,19 @@ struct ev_task {
     ev_task_work_fn work_fn;
     ev_task_done_fn done_fn;
     void *user_data;
-    ev_post_free_fn free_user;
+    ev_post_free_fn free_fn;
 
     void *result;
-    int status;     // 业务 status（return_ptr）；投递失败时改为非 0
-    int returned;   // 是否调用过 return_ptr
-    int started;    // run 已成功提交
+    int status;   // 业务 status（return_ptr）；投递失败时改为非 0
+    int returned; // 是否调用过 return_ptr
+    int started;  // run 已成功提交
 
     ev_task_backend_t backend;
-    ev_work_svc_t *work;
+    ev_work_t *work;
     ev_pool_t *pool;
 };
 
-ev_task_t *ev_task_new(ev_loop_t *loop, ev_task_done_fn done, void *user_data, ev_post_free_fn free_user)
+ev_task_t *ev_task_new(ev_loop_t *loop, ev_task_done_fn done, void *user_data, ev_post_free_fn free_fn)
 {
     if (loop == NULL) {
         return NULL;
@@ -43,7 +43,7 @@ ev_task_t *ev_task_new(ev_loop_t *loop, ev_task_done_fn done, void *user_data, e
     task->loop = loop;
     task->done_fn = done;
     task->user_data = user_data;
-    task->free_user = free_user;
+    task->free_fn = free_fn;
     return task;
 }
 
@@ -52,13 +52,13 @@ void ev_task_free(ev_task_t *task)
     if (task == NULL || task->started) {
         return;
     }
-    if (task->free_user != NULL) {
-        task->free_user(task->user_data);
+    if (task->free_fn != NULL) {
+        task->free_fn(task->user_data);
     }
     free(task);
 }
 
-int ev_task_use_work(ev_task_t *task, ev_work_svc_t *work)
+int ev_task_use_work(ev_task_t *task, ev_work_t *work)
 {
     if (task == NULL || work == NULL || task->started) {
         return -1;
@@ -135,8 +135,8 @@ static void ev_task_bridge_done(void *user_data, int deliver_status)
 static void ev_task_bridge_free(void *user_data)
 {
     ev_task_t *task = user_data;
-    if (task->free_user != NULL) {
-        task->free_user(task->user_data);
+    if (task->free_fn != NULL) {
+        task->free_fn(task->user_data);
     }
     free(task);
 }
@@ -154,7 +154,7 @@ int ev_task_run(ev_task_t *task, ev_task_work_fn work)
 
     int rc = -1;
     if (task->backend == EV_TASK_BACKEND_WORK) {
-        rc = ev_work_run(task->work, task->loop, ev_task_bridge_work, ev_task_bridge_done, task, ev_task_bridge_free);
+        rc = ev_work_submit(task->work, task->loop, ev_task_bridge_work, ev_task_bridge_done, task, ev_task_bridge_free);
     } else if (task->backend == EV_TASK_BACKEND_POOL) {
         rc = ev_pool_submit(task->pool, task->loop, ev_task_bridge_work, ev_task_bridge_done, task, ev_task_bridge_free);
     }
@@ -165,4 +165,20 @@ int ev_task_run(ev_task_t *task, ev_task_work_fn work)
     }
     task->started = 1;
     return 0;
+}
+
+int ev_task_run_work(ev_task_t *task, ev_work_t *work, ev_task_work_fn work_fn)
+{
+    if (ev_task_use_work(task, work) != 0) {
+        return -1;
+    }
+    return ev_task_run(task, work_fn);
+}
+
+int ev_task_run_pool(ev_task_t *task, ev_pool_t *pool, ev_task_work_fn work_fn)
+{
+    if (ev_task_use_pool(task, pool) != 0) {
+        return -1;
+    }
+    return ev_task_run(task, work_fn);
 }

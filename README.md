@@ -21,7 +21,7 @@ examples/          示例；examples/demo 为官方写法模板
 | **核心** | `src/core/` | `ev_fsm` | 边表 + 事件队列；`free_arg`；强制 `EV_FSM_FAULT` |
 | **插件** | `src/plugins/` | `ev_bus` | 观察者扇出：`match`+`match_arg`；`SYNC`/`POST`；建在 `ev_loop_post` 之上 |
 | **插件** | `src/plugins/` | `ev_pool` | 有界线程池；`submit` 后 `done` 经 `ev_loop_post` 回 `target_loop` |
-| **插件** | `src/plugins/` | `ev_work` | 轻量 offload；临时线程跑 `work`，`done` 经 `post` 回 loop；`drain` 等在途 |
+| **插件** | `src/plugins/` | `ev_work` | 轻量 offload；`submit` 起临时线程，`done` 经 `post` 回 loop；`drain` 等在途 |
 | **插件** | `src/plugins/` | `ev_task` | 任务门面：统一 `return`/done；后端可选 work 或 pool |
 
 产品可只链核心；需要总线/offload/任务门面时再链对应插件。
@@ -131,8 +131,8 @@ ev_loop_run（单线程）
 - **post_full**：`ev_loop_post_full(cb, ud, free_fn)`；`free_fn` 在 callback 之后或 deinit 丢弃时恰好一次；有 `free_fn` 时 callback 内勿再 free 同一块
 - **bus**：`subscribe(mode, target_loop, cb, ud, match, match_arg)`；`publish(topic, payload)` 对命中项扇出；回调类型 `ev_bus_cb`；简单场景用 `ev_bus_match_u32`；范围/掩码等由应用写 `match`；`publish` 返回成功分发次数；POST 满则 `post_dropped++`；退订不撤销已入队 POST；**POST 保活见上文硬规则**；delivery 走 `post_full`
 - **pool**：`submit(pool, target_loop, work, done, user_data, free_fn)`；`free_fn` 与 `ev_loop_post_full` 同义；`shutdown(DRAIN|DISCARD)`；计数 `submit_dropped` / `jobs_discarded` / `done_dropped`；`done` 的 `status==0` 在 target_loop，`status!=0` 表示投递失败（在 worker 上调 done，仍禁止碰 fsm/io/timer/bus）
-- **work**：轻量 pool（无队列、临时线程）；`run(svc, target_loop, work, done, user_data, free_fn)` + `drain`；完成语义同 pool；偶发阻塞用 work，持续多任务限并发用 pool
-- **task**：`new` → `use_work`/`use_pool` → `run(work_fn)`；线程里 `return_ptr`；loop 上 `done` 里 `get_ptr`/`get_status`；成功 run 后由库释放 task；换后端不改业务回调形状
+- **work**：轻量 pool（无队列、临时线程）；`submit(work, target_loop, fn, done, user_data, free_fn)` + `drain`；完成语义同 pool；偶发阻塞用 work，持续多任务限并发用 pool
+- **task**：`new` → `run_work`/`run_pool`（或 `use_*` + `run`）；线程里 `return_ptr`；loop 上 `done` 里 `get_ptr`/`get_status`；成功 run 后由库释放 task；`free_fn` 释放 user_data
 - **post/FSM 队列满**：均返回 `-1` 并累计计数；**FSM** 满时库 `free_arg(arg)`；**loop post** 满时调用方 free `user_data`（两套模型见「资源所有权」）
 - **步数上限**：嵌套 `run` → `-1`；post drain 触达上限则 `post_drain_limit_hits++`；FSM 单次 poll 触达 `EV_FSM_POLL_MAX_STEPS` 则清空队列并投入 `EV_FSM_FAULT`，同一次 while 继续消化（`poll_limit_hits++`）；处理 FAULT 时先清积压再 apply，FAULT 边新 post 留到下一次 poll
 - **迁移顺序**：`on_exit` → `action` → 改 state → `on_enter`；action 内 `get_state()` 仍是旧状态

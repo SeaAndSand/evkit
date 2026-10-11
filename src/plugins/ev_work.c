@@ -9,59 +9,56 @@
 #include <string.h>
 
 typedef struct {
-    ev_work_done_fn done;
-    void *user_data;
-    ev_post_free_fn free_fn;
-} ev_work_delivery_t;
-
-typedef struct {
-    ev_work_svc_t *svc;
-    ev_work_fn work;
+    ev_work_t *work;
+    ev_work_fn fn;
     ev_work_done_fn done;
     void *user_data;
     ev_post_free_fn free_fn;
     ev_loop_t *target_loop;
 } ev_work_job_t;
 
-static void ev_work_on_delivery(void *user_data) {
-    ev_work_delivery_t *d = user_data;
-    if (d->done != NULL) {
-        d->done(d->user_data, 0);
+static void ev_work_on_delivery(void *user_data)
+{
+    ev_work_job_t *job = user_data;
+    if (job->done != NULL) {
+        job->done(job->user_data, 0);
     }
 }
 
-static void ev_work_free_delivery(void *user_data) {
-    ev_work_delivery_t *d = user_data;
-    if (d->free_fn != NULL) {
-        d->free_fn(d->user_data);
+static void ev_work_free_delivery(void *user_data)
+{
+    ev_work_job_t *job = user_data;
+    if (job->free_fn != NULL) {
+        job->free_fn(job->user_data);
     }
-    free(d);
+    free(job);
 }
 
-static void ev_work_finish_local(ev_work_job_t *job, int status) {
+/** 本地完成：调 done/free_fn 并释放 job */
+static void ev_work_finish_local(ev_work_job_t *job, int status)
+{
     if (job->done != NULL) {
         job->done(job->user_data, status);
     }
     if (job->free_fn != NULL) {
         job->free_fn(job->user_data);
     }
+    free(job);
 }
 
-static void ev_work_job_finish(ev_work_svc_t *svc, ev_work_job_t *job) {
+/**
+ * 完成后投递到 loop，或本地收尾。
+ * 成功 post 后 job 由 free_delivery 释放；否则本函数释放。
+ */
+static void ev_work_job_finish(ev_work_t *work, ev_work_job_t *job)
+{
     if (job->target_loop != NULL && (job->done != NULL || job->free_fn != NULL)) {
-        ev_work_delivery_t *d = calloc(1, sizeof(*d));
-        if (d != NULL) {
-            d->done = job->done;
-            d->user_data = job->user_data;
-            d->free_fn = job->free_fn;
-            if (ev_loop_post_full(job->target_loop, ev_work_on_delivery, d, ev_work_free_delivery) == 0) {
-                return;
-            }
-            free(d);
+        if (ev_loop_post_full(job->target_loop, ev_work_on_delivery, job, ev_work_free_delivery) == 0) {
+            return;
         }
-        pthread_mutex_lock(&svc->mu);
-        svc->done_dropped++;
-        pthread_mutex_unlock(&svc->mu);
+        pthread_mutex_lock(&work->mu);
+        work->done_dropped++;
+        pthread_mutex_unlock(&work->mu);
         ev_work_finish_local(job, -1);
         return;
     }
@@ -69,79 +66,81 @@ static void ev_work_job_finish(ev_work_svc_t *svc, ev_work_job_t *job) {
     ev_work_finish_local(job, 0);
 }
 
-static void *ev_work_thread_main(void *arg) {
+static void *ev_work_thread_main(void *arg)
+{
     ev_work_job_t *job = arg;
-    ev_work_svc_t *svc = job->svc;
+    ev_work_t *work = job->work;
 
-    if (job->work != NULL) {
-        job->work(job->user_data);
+    if (job->fn != NULL) {
+        job->fn(job->user_data);
     }
-    ev_work_job_finish(svc, job);
+    ev_work_job_finish(work, job);
 
-    pthread_mutex_lock(&svc->mu);
-    svc->inflight--;
-    pthread_cond_broadcast(&svc->cv);
-    pthread_mutex_unlock(&svc->mu);
-
-    free(job);
+    pthread_mutex_lock(&work->mu);
+    work->inflight--;
+    pthread_cond_broadcast(&work->cv);
+    pthread_mutex_unlock(&work->mu);
     return NULL;
 }
 
-int ev_work_init(ev_work_svc_t *svc) {
-    if (svc == NULL) {
+static void ev_work_abort_inflight(ev_work_t *work)
+{
+    pthread_mutex_lock(&work->mu);
+    work->inflight--;
+    pthread_cond_broadcast(&work->cv);
+    pthread_mutex_unlock(&work->mu);
+}
+
+int ev_work_init(ev_work_t *work)
+{
+    if (work == NULL) {
         return -1;
     }
-    memset(svc, 0, sizeof(*svc));
-    if (pthread_mutex_init(&svc->mu, NULL) != 0) {
+    memset(work, 0, sizeof(*work));
+    if (pthread_mutex_init(&work->mu, NULL) != 0) {
         return -1;
     }
-    if (pthread_cond_init(&svc->cv, NULL) != 0) {
-        pthread_mutex_destroy(&svc->mu);
+    if (pthread_cond_init(&work->cv, NULL) != 0) {
+        pthread_mutex_destroy(&work->mu);
         return -1;
     }
-    svc->running = 1;
+    work->running = 1;
     return 0;
 }
 
-int ev_work_drain(ev_work_svc_t *svc) {
-    if (svc == NULL) {
+int ev_work_drain(ev_work_t *work)
+{
+    if (work == NULL) {
         return -1;
     }
-    pthread_mutex_lock(&svc->mu);
-    while (svc->inflight > 0) {
-        pthread_cond_wait(&svc->cv, &svc->mu);
+    pthread_mutex_lock(&work->mu);
+    while (work->inflight > 0) {
+        pthread_cond_wait(&work->cv, &work->mu);
     }
-    pthread_mutex_unlock(&svc->mu);
+    pthread_mutex_unlock(&work->mu);
     return 0;
 }
 
-int ev_work_inflight(ev_work_svc_t *svc) {
-    if (svc == NULL) {
-        return 0;
-    }
-    pthread_mutex_lock(&svc->mu);
-    int n = svc->inflight;
-    pthread_mutex_unlock(&svc->mu);
-    return n;
-}
-
-void ev_work_deinit(ev_work_svc_t *svc) {
-    if (svc == NULL) {
+void ev_work_deinit(ev_work_t *work)
+{
+    if (work == NULL) {
         return;
     }
-    pthread_mutex_lock(&svc->mu);
-    svc->running = 0;
-    pthread_mutex_unlock(&svc->mu);
+    pthread_mutex_lock(&work->mu);
+    work->running = 0;
+    pthread_mutex_unlock(&work->mu);
 
-    (void)ev_work_drain(svc);
+    (void)ev_work_drain(work);
 
-    pthread_cond_destroy(&svc->cv);
-    pthread_mutex_destroy(&svc->mu);
-    memset(svc, 0, sizeof(*svc));
+    pthread_cond_destroy(&work->cv);
+    pthread_mutex_destroy(&work->mu);
+    memset(work, 0, sizeof(*work));
 }
 
-int ev_work_run(ev_work_svc_t *svc, ev_loop_t *target_loop, ev_work_fn work, ev_work_done_fn done, void *user_data, ev_post_free_fn free_fn) {
-    if (svc == NULL || work == NULL) {
+int ev_work_submit(ev_work_t *work, ev_loop_t *target_loop, ev_work_fn fn, ev_work_done_fn done, void *user_data,
+                   ev_post_free_fn free_fn)
+{
+    if (work == NULL || fn == NULL) {
         return -1;
     }
     if (done != NULL && target_loop == NULL) {
@@ -152,29 +151,26 @@ int ev_work_run(ev_work_svc_t *svc, ev_loop_t *target_loop, ev_work_fn work, ev_
     if (job == NULL) {
         return -1;
     }
-    job->svc = svc;
     job->work = work;
+    job->fn = fn;
     job->done = done;
     job->user_data = user_data;
     job->free_fn = free_fn;
     job->target_loop = target_loop;
 
-    pthread_mutex_lock(&svc->mu);
-    if (!svc->running) {
-        pthread_mutex_unlock(&svc->mu);
+    pthread_mutex_lock(&work->mu);
+    if (!work->running) {
+        pthread_mutex_unlock(&work->mu);
         free(job);
         return -1;
     }
-    svc->inflight++;
-    pthread_mutex_unlock(&svc->mu);
+    work->inflight++;
+    pthread_mutex_unlock(&work->mu);
 
     pthread_t tid;
     pthread_attr_t attr;
     if (pthread_attr_init(&attr) != 0) {
-        pthread_mutex_lock(&svc->mu);
-        svc->inflight--;
-        pthread_cond_broadcast(&svc->cv);
-        pthread_mutex_unlock(&svc->mu);
+        ev_work_abort_inflight(work);
         free(job);
         return -1;
     }
@@ -183,10 +179,7 @@ int ev_work_run(ev_work_svc_t *svc, ev_loop_t *target_loop, ev_work_fn work, ev_
     pthread_attr_destroy(&attr);
 
     if (rc != 0) {
-        pthread_mutex_lock(&svc->mu);
-        svc->inflight--;
-        pthread_cond_broadcast(&svc->cv);
-        pthread_mutex_unlock(&svc->mu);
+        ev_work_abort_inflight(work);
         free(job);
         return -1;
     }

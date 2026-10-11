@@ -1,6 +1,6 @@
 /**
  * @file    test_task.c
- * @brief   ev_task：work/pool 后端、return_ptr、run 失败释放
+ * @brief   ev_task：work/pool 后端、return_ptr、快捷 run_*、run 失败释放
  */
 #define _DEFAULT_SOURCE
 #include "evkit/ev_loop.h"
@@ -61,19 +61,18 @@ static void on_done(ev_task_t *task)
     ev_loop_stop(ctx->loop);
 }
 
-static void test_task_with_work(void)
+static void test_task_run_work(void)
 {
-    printf("[task] use_work + return_ptr\n");
+    printf("[task] run_work + return_ptr\n");
     ev_loop_t loop = {0};
-    ev_work_svc_t work;
+    ev_work_t work;
     task_ctx_t ctx = {0};
     ctx.loop = &loop;
 
     expect_true(ev_loop_init(&loop) == 0 && ev_work_init(&work) == 0, "init");
     ev_task_t *task = ev_task_new(&loop, on_done, &ctx, NULL);
     expect_true(task != NULL, "new");
-    expect_true(ev_task_use_work(task, &work) == 0, "use_work");
-    expect_true(ev_task_run(task, compute_work) == 0, "run");
+    expect_true(ev_task_run_work(task, &work, compute_work) == 0, "run_work");
     expect_true(ev_loop_run(&loop) == 0, "loop");
     expect_true(ctx.done_n == 1, "done");
     expect_true(ctx.last_status == 0, "status");
@@ -84,9 +83,9 @@ static void test_task_with_work(void)
     ev_loop_deinit(&loop);
 }
 
-static void test_task_with_pool(void)
+static void test_task_run_pool(void)
 {
-    printf("[task] use_pool + return_ptr\n");
+    printf("[task] run_pool + return_ptr\n");
     ev_loop_t loop = {0};
     ev_pool_t pool;
     task_ctx_t ctx = {0};
@@ -95,8 +94,7 @@ static void test_task_with_pool(void)
     expect_true(ev_loop_init(&loop) == 0 && ev_pool_init(&pool, 2) == 0, "init");
     ev_task_t *task = ev_task_new(&loop, on_done, &ctx, NULL);
     expect_true(task != NULL, "new");
-    expect_true(ev_task_use_pool(task, &pool) == 0, "use_pool");
-    expect_true(ev_task_run(task, compute_work) == 0, "run");
+    expect_true(ev_task_run_pool(task, &pool, compute_work) == 0, "run_pool");
     expect_true(ev_loop_run(&loop) == 0, "loop");
     expect_true(ctx.done_n == 1 && ctx.last_status == 0, "done ok");
     expect_true(ctx.last_ptr_value != NULL && *ctx.last_ptr_value == 43, "result");
@@ -130,13 +128,13 @@ static void test_task_auto_return(void)
 {
     printf("[task] work 未 return → 自动 NULL/0\n");
     ev_loop_t loop = {0};
-    ev_work_svc_t work;
+    ev_work_t work;
     task_ctx_t ctx = {0};
     ctx.loop = &loop;
 
     expect_true(ev_loop_init(&loop) == 0 && ev_work_init(&work) == 0, "init");
     ev_task_t *task = ev_task_new(&loop, on_done, &ctx, NULL);
-    expect_true(ev_task_use_work(task, &work) == 0 && ev_task_run(task, nop_work) == 0, "run");
+    expect_true(ev_task_run_work(task, &work, nop_work) == 0, "run");
     expect_true(ev_loop_run(&loop) == 0, "loop");
     expect_true(ctx.done_n == 1 && ctx.last_status == 0, "status 0");
     expect_true(ctx.last_ptr_value == NULL, "ptr null");
@@ -145,11 +143,31 @@ static void test_task_auto_return(void)
     ev_loop_deinit(&loop);
 }
 
+static void test_task_use_then_run(void)
+{
+    printf("[task] use_work + run 仍可用\n");
+    ev_loop_t loop = {0};
+    ev_work_t work;
+    task_ctx_t ctx = {0};
+    ctx.loop = &loop;
+
+    expect_true(ev_loop_init(&loop) == 0 && ev_work_init(&work) == 0, "init");
+    ev_task_t *task = ev_task_new(&loop, on_done, &ctx, NULL);
+    expect_true(ev_task_use_work(task, &work) == 0, "use");
+    expect_true(ev_task_run(task, nop_work) == 0, "run");
+    expect_true(ev_loop_run(&loop) == 0, "loop");
+    expect_true(ctx.done_n == 1, "done");
+
+    ev_work_deinit(&work);
+    ev_loop_deinit(&loop);
+}
+
 void test_task_suite(void)
 {
     printf("======== ev_task ========\n");
-    test_task_with_work();
-    test_task_with_pool();
+    test_task_run_work();
+    test_task_run_pool();
     test_task_run_requires_backend();
     test_task_auto_return();
+    test_task_use_then_run();
 }

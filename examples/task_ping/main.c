@@ -32,7 +32,7 @@ enum {
 
 typedef struct {
     ev_loop_t *loop;
-    ev_work_svc_t *work;
+    ev_work_t *work;
     ev_pool_t *pool;
     int use_pool;
     ev_fsm_t fsm;
@@ -93,12 +93,12 @@ static void action_start(void *user_data, int event, void *arg)
     int rc;
     if (app->use_pool) {
         printf("[main] backend=pool\n");
-        rc = ev_task_use_pool(task, app->pool);
+        rc = ev_task_run_pool(task, app->pool, compute_work);
     } else {
         printf("[main] backend=work\n");
-        rc = ev_task_use_work(task, app->work);
+        rc = ev_task_run_work(task, app->work, compute_work);
     }
-    if (rc != 0 || ev_task_run(task, compute_work) != 0) {
+    if (rc != 0) {
         fprintf(stderr, "[main] task run failed\n");
         ev_task_free(task);
         app_post(app, EV_RESULT_FAIL);
@@ -153,7 +153,7 @@ int main(int argc, char **argv)
     }
 
     ev_loop_t loop;
-    ev_work_svc_t work;
+    ev_work_t work;
     ev_pool_t pool;
     app_t app;
 

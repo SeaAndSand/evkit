@@ -30,7 +30,7 @@ enum {
 
 typedef struct {
     ev_loop_t *loop;
-    ev_work_svc_t *work;
+    ev_work_t *work;
     ev_fsm_t fsm;
     int answer;
 } app_t;
@@ -87,9 +87,9 @@ static void action_start(void *user_data, int event, void *arg)
     }
     job->app = app;
     job->input = 21;
-    printf("[main] ev_work_run\n");
-    if (ev_work_run(app->work, app->loop, job_work, job_done, job, job_free) != 0) {
-        fprintf(stderr, "[main] run failed\n");
+    printf("[main] ev_work_submit\n");
+    if (ev_work_submit(app->work, app->loop, job_work, job_done, job, job_free) != 0) {
+        fprintf(stderr, "[main] submit failed\n");
         free(job);
         app_post(app, EV_RESULT_FAIL);
     }
@@ -138,7 +138,7 @@ static const ev_fsm_state_t k_states[ST_COUNT] = {
 int main(void)
 {
     ev_loop_t loop;
-    ev_work_svc_t work;
+    ev_work_t work;
     app_t app;
 
     memset(&app, 0, sizeof(app));

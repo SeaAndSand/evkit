@@ -8,13 +8,13 @@
  * 灵感来自 GTask 的「任务对象」，不是 GLib 兼容层；无 cancel / GObject。
  *
  * ---- 生命周期 ----
- * new 成功后：run 成功则所有权交给库，done 返回后 free_user(user_data) 并释放 task；
- * run 失败或尚未 run：调用方 ev_task_free（会调 free_user）。
+ * new 成功后：run 成功则所有权交给库，done 返回后 free_fn(user_data) 并释放 task；
+ * run 失败或尚未 run：调用方 ev_task_free（会调 free_fn）。
  *
  * ---- 线程 ----
  * work 回调在后端线程；仅可 ev_task_return_* / 读写自有数据。
  * done 在 target_loop（投递失败时在后端线程，status 反映投递失败）。
- * work/done 内禁止直接调对方后端未允许的 fsm/io/timer/bus（同 work/pool）。
+ * work/done 内禁止直接调 fsm/io/timer/bus（同 work/pool）。
  */
 #ifndef EV_TASK_H
 #define EV_TASK_H
@@ -37,10 +37,10 @@ typedef void (*ev_task_done_fn)(ev_task_t *task);
 
 /**
  * @brief  分配任务并绑定 loop / done
- * @param  free_user  可 NULL；在 done 之后或 ev_task_free 时释放 user_data
+ * @param  free_fn  可 NULL；在 done 之后或 ev_task_free 时释放 user_data
  * @return 任务指针；失败 NULL
  */
-ev_task_t *ev_task_new(ev_loop_t *loop, ev_task_done_fn done, void *user_data, ev_post_free_fn free_user);
+ev_task_t *ev_task_new(ev_loop_t *loop, ev_task_done_fn done, void *user_data, ev_post_free_fn free_fn);
 
 /**
  * @brief  释放尚未成功 run 的任务（成功 run 后勿调用）
@@ -48,7 +48,7 @@ ev_task_t *ev_task_new(ev_loop_t *loop, ev_task_done_fn done, void *user_data, e
 void ev_task_free(ev_task_t *task);
 
 /** 选择 ev_work 后端（与 use_pool 互斥，后者覆盖前者） */
-int ev_task_use_work(ev_task_t *task, ev_work_svc_t *work);
+int ev_task_use_work(ev_task_t *task, ev_work_t *work);
 
 /** 选择 ev_pool 后端 */
 int ev_task_use_pool(ev_task_t *task, ev_pool_t *pool);
@@ -58,6 +58,12 @@ int ev_task_use_pool(ev_task_t *task, ev_pool_t *pool);
  * @return 0 成功（此后由库释放 task）；-1 失败（调用方 ev_task_free）
  */
 int ev_task_run(ev_task_t *task, ev_task_work_fn work);
+
+/** use_work + run 的快捷方式 */
+int ev_task_run_work(ev_task_t *task, ev_work_t *work, ev_task_work_fn work_fn);
+
+/** use_pool + run 的快捷方式 */
+int ev_task_run_pool(ev_task_t *task, ev_pool_t *pool, ev_task_work_fn work_fn);
 
 /**
  * @brief  在 work 线程填写指针结果与业务 status（0=成功）

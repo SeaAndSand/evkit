@@ -1,6 +1,6 @@
 /**
  * @file    test_work.c
- * @brief   ev_work：run/done、drain、post 满兜底
+ * @brief   ev_work：submit/done、drain、post 满兜底
  */
 #define _DEFAULT_SOURCE
 #include "evkit/ev_loop.h"
@@ -62,29 +62,28 @@ static void job_done(void *p, int status)
     }
 }
 
-static void test_work_run_done(void)
+static void test_work_submit_done(void)
 {
-    printf("[work] run + done on target_loop\n");
+    printf("[work] submit + done on target_loop\n");
     ev_loop_t loop = {0};
-    ev_work_svc_t svc;
+    ev_work_t work;
     work_ctx_t ctx = {0};
     ctx.loop = &loop;
 
-    expect_true(ev_loop_init(&loop) == 0 && ev_work_init(&svc) == 0, "init");
+    expect_true(ev_loop_init(&loop) == 0 && ev_work_init(&work) == 0, "init");
 
     job_t *job = calloc(1, sizeof(*job));
     expect_true(job != NULL, "alloc");
     job->ctx = &ctx;
     job->value = 21;
 
-    expect_true(ev_work_run(&svc, &loop, job_work, job_done, job, job_free) == 0, "run");
+    expect_true(ev_work_submit(&work, &loop, job_work, job_done, job, job_free) == 0, "submit");
     expect_true(ev_loop_run(&loop) == 0, "loop run");
     expect_true(ctx.done_n == 1, "done once");
     expect_true(ctx.last_value == 42, "value");
     expect_true(ctx.free_n == 1, "freed once");
-    expect_true(ev_work_inflight(&svc) == 0, "inflight 0");
 
-    ev_work_deinit(&svc);
+    ev_work_deinit(&work);
     ev_loop_deinit(&loop);
 }
 
@@ -97,23 +96,21 @@ static void slow_work(void *p)
 static void test_work_drain(void)
 {
     printf("[work] drain 等待在途结束\n");
-    ev_work_svc_t svc;
-    expect_true(ev_work_init(&svc) == 0, "init");
-    expect_true(ev_work_run(&svc, NULL, slow_work, NULL, NULL, NULL) == 0, "run1");
-    expect_true(ev_work_run(&svc, NULL, slow_work, NULL, NULL, NULL) == 0, "run2");
-    expect_true(ev_work_inflight(&svc) >= 1, "inflight");
-    expect_true(ev_work_drain(&svc) == 0, "drain");
-    expect_true(ev_work_inflight(&svc) == 0, "drained");
-    ev_work_deinit(&svc);
+    ev_work_t work;
+    expect_true(ev_work_init(&work) == 0, "init");
+    expect_true(ev_work_submit(&work, NULL, slow_work, NULL, NULL, NULL) == 0, "submit1");
+    expect_true(ev_work_submit(&work, NULL, slow_work, NULL, NULL, NULL) == 0, "submit2");
+    expect_true(ev_work_drain(&work) == 0, "drain");
+    ev_work_deinit(&work);
 }
 
 static void test_work_done_requires_loop(void)
 {
     printf("[work] done 非 NULL 时 target_loop 必填\n");
-    ev_work_svc_t svc;
-    expect_true(ev_work_init(&svc) == 0, "init");
-    expect_true(ev_work_run(&svc, NULL, slow_work, job_done, NULL, NULL) == -1, "reject");
-    ev_work_deinit(&svc);
+    ev_work_t work;
+    expect_true(ev_work_init(&work) == 0, "init");
+    expect_true(ev_work_submit(&work, NULL, slow_work, job_done, NULL, NULL) == -1, "reject");
+    ev_work_deinit(&work);
 }
 
 static pthread_mutex_t g_fail_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -152,19 +149,19 @@ static void test_work_done_on_post_fail(void)
 {
     printf("[work] target_loop post 满：临时线程 done(status!=0)+free\n");
     ev_loop_t loop = {0};
-    ev_work_svc_t svc;
+    ev_work_t work;
     g_fail_done = 0;
     g_fail_status = 0;
     g_fail_free = 0;
 
-    expect_true(ev_loop_init(&loop) == 0 && ev_work_init(&svc) == 0, "init");
+    expect_true(ev_loop_init(&loop) == 0 && ev_work_init(&work) == 0, "init");
     for (int i = 0; i < EV_LOOP_POST_CAPACITY; i++) {
         expect_true(ev_loop_post(&loop, post_nop, NULL) == 0, "fill post");
     }
 
     void *payload = malloc(1);
     expect_true(payload != NULL, "malloc");
-    expect_true(ev_work_run(&svc, &loop, fail_work, fail_done, payload, fail_free) == 0, "run");
+    expect_true(ev_work_submit(&work, &loop, fail_work, fail_done, payload, fail_free) == 0, "submit");
 
     pthread_mutex_lock(&g_fail_mu);
     while (!g_fail_done) {
@@ -174,17 +171,17 @@ static void test_work_done_on_post_fail(void)
 
     expect_true(g_fail_status != 0, "status != 0");
     expect_true(g_fail_free == 1, "freed");
-    expect_true(svc.done_dropped >= 1, "done_dropped");
+    expect_true(work.done_dropped >= 1, "done_dropped");
 
-    (void)ev_work_drain(&svc);
-    ev_work_deinit(&svc);
+    (void)ev_work_drain(&work);
+    ev_work_deinit(&work);
     ev_loop_deinit(&loop);
 }
 
 void test_work_suite(void)
 {
     printf("======== ev_work ========\n");
-    test_work_run_done();
+    test_work_submit_done();
     test_work_drain();
     test_work_done_requires_loop();
     test_work_done_on_post_fail();
