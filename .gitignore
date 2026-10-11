@@ -1,0 +1,31 @@
+# xmake
+.xmake/
+build/
+*.build
+
+# 旧 Makefile 根目录产物（若仍残留）
+*.o
+*.a
+*.so
+*.so.*
+/evkit_demo
+/evkit_test
+/tcp_cmd_client
+/worker_ping
+/topic_hub
+/upgrade_link
+/tcp_reconnect
+/orch_demo
+/bus_demo
+
+# IDE / clangd
+.cache/
+*.idx
+# compile_commands.json 可由 xmake 自动生成，按需提交；默认忽略本地生成
+# compile_commands.json
+
+# 杂项
+*.log
+*~
+*.swp
+.DS_Store

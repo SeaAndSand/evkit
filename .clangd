@@ -1,0 +1,8 @@
+CompileFlags:
+  Add:
+    - -std=c11
+    - -Wall
+    - -Wextra
+    - -pthread
+    - -Iinclude
+    - -Iexamples/tcp_cmd_client
