@@ -136,12 +136,12 @@ ev_loop_run（单线程）
 - **post/FSM 队列满**：均返回 `-1` 并累计计数；**FSM** 满时库 `free_arg(arg)`；**loop post** 满时调用方 free `user_data`（两套模型见「资源所有权」）
 - **步数上限**：嵌套 `run` → `-1`；post drain 触达上限则 `post_drain_limit_hits++`；FSM 单次 poll 触达 `EV_FSM_POLL_MAX_STEPS` 则清空队列并投入 `EV_FSM_FAULT`，同一次 while 继续消化（`poll_limit_hits++`）；处理 FAULT 时先清积压再 apply，FAULT 边新 post 留到下一次 poll
 - **迁移顺序**：`on_exit` → `action` → 改 state → `on_enter`；action 内 `get_state()` 仍是旧状态
-- **多超时约定**（不进核心；写法见 `examples/nested_timeout/`、`examples/cmd_retry/`）
+- **多超时约定**（不进核心；写法见 `examples/nested_timeout/`）
   1. 超时有身份：`EV_DEADLINE` / `EV_STEP_TO` / `EV_Wi_TO` …，禁止一个匿名 `EV_TIMEOUT` 打所有边
   2. 生命周期跟状态走：`on_enter` arm、`on_exit` disarm；action 只做业务
   3. 迟到事件靠边表自然丢弃；同 timer 复用跨步时可用 generation
   - 整单截止用 `ev_timer_start_at`；每步用独立或复用的 step timer
-  - 步进失败重试：`STEP → RETRY → STEP`，整单 deadline 贯穿不刷新；无 guard 时用 STAY + action 内 post 细分事件（`cmd_retry`）
+  - 步进失败重试：`STEP → RETRY → STEP`，整单 deadline 贯穿不刷新；无 guard 时用 STAY + action 内 post 细分事件
   - 并发等待：协调态 + 固定 wait 槽（各槽自有 timer），退出态统一 disarm
   - 父子：同 loop 两台 FSM；子超时收敛后再 `post` 父事件冒泡；若子向「本轮已 poll」的父投递，需再 `ev_loop_post` 空回调唤醒下一轮；勿在对方 poll 路径 `deinit`
 
@@ -156,23 +156,16 @@ ev_loop_run（单线程）
 依赖：[xmake](https://xmake.io) ≥ 2.8。
 
 ```bash
-xmake                  # 构建 libevkit_core / libevkit_bus + evkit_demo
-xmake test             # 单元测试（含 test_ownership）
-xmake run evkit_demo   # 官方 API 模板
+xmake                  # 构建库 + evkit_demo
+xmake test             # 单元测试
 xmake build -g examples
+xmake run evkit_demo
 xmake run worker_ping
-xmake run pool_ping       # 线程池插件：submit → done@loop → fsm
-xmake run work_ping       # 轻量 offload：临时线程 → done@loop → fsm
-xmake run task_ping       # 任务门面（默认 work）；`task_ping -- pool` 换池
-xmake run topic_hub
+xmake run tcp_reconnect -- 127.0.0.1 9100   # 需先起 echo_server.py
+xmake run nested_timeout
 xmake run upgrade_link [-- rs485]
-xmake run orch_demo
-xmake run nested_timeout  # 整单+步进 / 并发 wait 槽 / 父子超时冒泡
-xmake run cmd_retry       # 整单 deadline + STEP/RETRY 重试
-xmake run bus_demo
-xmake build tcp_reconnect
-xmake run tcp_reconnect -- 127.0.0.1 9100
-xmake build tcp_cmd_client
+xmake run topic_hub
+xmake run task_ping                        # 默认 work；`task_ping -- pool` 换池
 xmake f -m release     # 可选：发布优化
 xmake f --examples=n   # 可选：不编示例
 ```
@@ -184,30 +177,29 @@ xmake f --examples=n   # 可选：不编示例
 | `evkit_core` | 静态库：loop + fsm |
 | `evkit_bus` / `evkit_pool` / `evkit_work` / `evkit_task` | 插件静态库（task 依赖 work+pool） |
 | `evkit` | phony：core + 全部插件 |
-| `evkit_demo` / `evkit_test` | 模板 / 回归 |
-| `worker_ping` / `pool_ping` / `work_ping` 等 | `examples` 组 |
+| `evkit_demo` / `evkit_test` | 官方模板 / 回归 |
+| `examples` 组 | 见下表 |
 
-### 推荐阅读顺序（产品切片）
+### 推荐阅读顺序
 
-1. **`examples/tcp_reconnect/`** — 连网会话：FSM + `ev_io` + timer，回调只 `post`  
+1. **`examples/demo/`** — 官方写法：回调只 `post`，回合末 poll  
+2. **`examples/tcp_reconnect/`** — 真实 TCP：FSM + `ev_io` + timer  
    ```bash
    python3 examples/tcp_reconnect/echo_server.py 9100   # 终端 1
    xmake run tcp_reconnect -- 127.0.0.1 9100            # 终端 2
    ```
-2. **`examples/worker_ping/`** — 跨线程：`xmake run worker_ping`  
-3. **`examples/topic_hub/`** — 总线扇出与 POST 保活：`xmake run topic_hub`  
-4. **`examples/upgrade_link/`** — CAN/485 式双口：日常拼帧+失联不用 FSM，升级用 FSM：`xmake run upgrade_link [-- rs485]`
-
-其余：`bus_demo` / `orchestrator` 偏 API 演示；`nested_timeout` / `cmd_retry` 专讲多超时与重试；`tcp_cmd_client` 为进阶全栈（读代码：`proto.h` → `session.c` → `cmd_engine.c` → `worker.c` → `cmds.c` → `main.c`）。
+3. **`examples/worker_ping/`** — 跨线程只 `ev_loop_post`  
+4. **`examples/nested_timeout/`** — 多超时约定（整单/步进/并发 wait/父子）  
+5. **`examples/topic_hub/`** — bus：SYNC/POST + 环缓保活  
+6. **`examples/task_ping/`** — task 门面（work / pool 可切换）  
+7. **`examples/upgrade_link/`** — 何时用 FSM、何时不用（双口升级会话）
 
 | 示例 | 依赖 |
 |------|------|
-| `evkit_demo` / `tcp_reconnect` / `worker_ping` / `upgrade_link` / `orch` / `nested_timeout` / `cmd_retry` | **仅核心** |
-| `pool_ping` | 核心 + `ev_pool` |
-| `work_ping` | 核心 + `ev_work` |
+| `evkit_demo` / `tcp_reconnect` / `worker_ping` / `nested_timeout` / `upgrade_link` | **仅核心** |
+| `topic_hub` | 核心 + `ev_bus` |
 | `task_ping` | 核心 + `ev_task`（及 work/pool） |
-| `bus_demo` / `topic_hub` / `tcp_cmd_client` | 核心 + `ev_bus` |
-| `tests/` | 核心 + bus + pool |
+| `tests/` | 核心 + 全部插件 |
 
 ## 已知边界
 

@@ -10,13 +10,12 @@ build/
 *.so.*
 /evkit_demo
 /evkit_test
-/tcp_cmd_client
 /worker_ping
 /topic_hub
 /upgrade_link
 /tcp_reconnect
-/orch_demo
-/bus_demo
+/nested_timeout
+/task_ping
 
 # IDE / clangd
 .cache/

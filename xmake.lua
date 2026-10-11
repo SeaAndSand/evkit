@@ -85,7 +85,7 @@ target("evkit_test")
     add_tests("default")
 
 --------------------------------------------------------------------------------
--- 示例
+-- 示例（聚焦 evkit 能力，一条学习路径）
 --------------------------------------------------------------------------------
 
 local function example_core(name, dir, default)
@@ -100,7 +100,7 @@ local function example_core(name, dir, default)
         end
 end
 
-local function example_full(name, dir)
+local function example_bus(name, dir)
     target(name)
         set_kind("binary")
         add_deps("evkit_core", "evkit_bus")
@@ -112,65 +112,17 @@ local function example_full(name, dir)
         end
 end
 
-local function example_pool(name, dir)
-    target(name)
-        set_kind("binary")
-        add_deps("evkit_core", "evkit_pool")
-        add_files(path.join(dir, "main.c"))
-        set_default(false)
-        set_group("examples")
-        if not has_config("examples") then
-            set_enabled(false)
-        end
-end
-
-local function example_work(name, dir)
-    target(name)
-        set_kind("binary")
-        add_deps("evkit_core", "evkit_work")
-        add_files(path.join(dir, "main.c"))
-        set_default(false)
-        set_group("examples")
-        if not has_config("examples") then
-            set_enabled(false)
-        end
-end
-
 example_core("evkit_demo", "examples/demo", true)
 example_core("worker_ping", "examples/worker_ping")
-example_core("upgrade_link", "examples/upgrade_link")
 example_core("tcp_reconnect", "examples/tcp_reconnect")
-example_core("orch_demo", "examples/orchestrator")
 example_core("nested_timeout", "examples/nested_timeout")
-example_core("cmd_retry", "examples/cmd_retry")
-example_full("bus_demo", "examples/bus_demo")
-example_full("topic_hub", "examples/topic_hub")
-example_pool("pool_ping", "examples/pool_ping")
-example_work("work_ping", "examples/work_ping")
+example_core("upgrade_link", "examples/upgrade_link")
+example_bus("topic_hub", "examples/topic_hub")
 
 target("task_ping")
     set_kind("binary")
     add_deps("evkit_core", "evkit_task")
     add_files("examples/task_ping/main.c")
-    set_default(false)
-    set_group("examples")
-    if not has_config("examples") then
-        set_enabled(false)
-    end
-
-target("tcp_cmd_client")
-    set_kind("binary")
-    add_deps("evkit_core", "evkit_bus")
-    add_files(
-        "examples/tcp_cmd_client/net_buf.c",
-        "examples/tcp_cmd_client/session.c",
-        "examples/tcp_cmd_client/cmd_engine.c",
-        "examples/tcp_cmd_client/worker.c",
-        "examples/tcp_cmd_client/cmds.c",
-        "examples/tcp_cmd_client/main.c",
-        "examples/tcp_cmd_client/cJSON.c")
-    add_includedirs("examples/tcp_cmd_client")
-    add_syslinks("m")
     set_default(false)
     set_group("examples")
     if not has_config("examples") then
